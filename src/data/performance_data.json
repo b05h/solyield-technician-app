@@ -1,0 +1,5 @@
+[{"underPerformingDays": 5,
+    "overPerformingDays": 12,
+    "daysNoData": 2,
+    "normalDays": 10,
+    "zeroEnergyDays": 1}]

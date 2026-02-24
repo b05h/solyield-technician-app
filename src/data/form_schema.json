@@ -1,0 +1,76 @@
+[{
+    "id": "form_maintenance_01",
+    "title": "Preventive Maintenance Checklist",
+    "sections": [
+        {
+            "id": "sec_site_info",
+            "title": "Site Information",
+            "fields": [
+                {
+                    "id": "f_inverter_serial",
+                    "type": "text",
+                    "label": "Inverter Serial Number",
+                    "placeholder": "Enter serial number",
+                    "required": true
+                },
+                {
+                    "id": "f_generation",
+                    "type": "number",
+                    "label": "Current Generation (kW)",
+                    "placeholder": "0.0",
+                    "required": true
+                }
+            ]
+        },
+        {
+            "id": "sec_inspection",
+            "title": "Visual Inspection",
+            "fields": [
+                {
+                    "id": "f_panel_condition",
+                    "type": "select",
+                    "label": "Panel Condition",
+                    "options": ["Clean", "Dusty", "Bird Droppings", "Damaged"],
+                    "required": true
+                },
+                {
+                    "id": "f_wiring_check",
+                    "type": "radio",
+                    "label": "Wiring Integrity",
+                    "options": ["Intact", "Exposed", "Damaged"],
+                    "display": "List"
+                },
+                {
+                    "id": "f_issues",
+                    "type": "checkbox",
+                    "label": "Issues Observed",
+                    "options": ["Shading", "Rusting", "Loose Connections"],
+                    "display": "Row"
+                }
+            ]
+        },
+        {
+            "id": "sec_evidence",
+            "title": "Evidence Upload",
+            "fields": [
+                {
+                    "id": "f_site_photo",
+                    "type": "file",
+                    "label": "Site Photo",
+                    "uploadType": "Capture",
+                    "uploadFileType": "Image",
+                    "required": true
+                },
+                {
+                    "id": "f_docs",
+                    "type": "file",
+                    "label": "Upload Documents",
+                    "uploadType": "Upload",
+                    "uploadFileType": "PDF",
+                    "numberOfFiles": 2
+                }
+            ]
+        }
+    ]
+}
+]

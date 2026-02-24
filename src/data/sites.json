@@ -1,0 +1,22 @@
+[
+    {
+      "id": "site_01",
+      "name": "Bhadla Solar Park",
+      "location": { "lat": 8.548195, "lng": 76.906604 },
+      "capacity": "2245 MW"
+    },
+    {
+      "id": "site_02",
+      "name": "Pavagada Solar Park",
+      "location": { "lat": 14.1666, "lng": 77.4333 },
+      "capacity": "2050 MW"
+    },
+     {
+      "id": "site_03",
+      "name": "Kurnool Ultra Mega Solar Park",
+      "location": { "lat": 15.6815, "lng": 78.1516 },
+      "capacity": "1000 MW"
+    }
+  ]
+
+  
