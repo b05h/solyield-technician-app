@@ -18,6 +18,8 @@ import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Calendar from 'expo-calendar';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { useDispatch, useSelector } from 'react-redux';
 import type { FormField, FormFieldValue, FormSchema } from '../../src/types/models';
@@ -67,12 +69,13 @@ export default function VisitDetailScreen() {
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [hasSavedLocally, setHasSavedLocally] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [formReadOnly, setFormReadOnly] = useState(false);
   const [hydrationDone, setHydrationDone] = useState(false);
 
   useEffect(() => {
     setResponsesState(formData);
-  }, [visitId]);
+  }, [formData]);
 
   useEffect(() => {
     if (!visitId) {
@@ -226,6 +229,13 @@ export default function VisitDetailScreen() {
           {site?.name} • ID: {visitId}
         </Text>
 
+        {isCompressing && (
+          <View style={styles.compressingRow}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.compressingText}>Compressing...</Text>
+          </View>
+        )}
+
         {hasSavedLocally && (
           <View style={styles.syncStatusRow}>
             <View style={styles.syncStatusIcon} />
@@ -233,7 +243,6 @@ export default function VisitDetailScreen() {
           </View>
         )}
 
-        {/* ✅ Always show button; disabled until eventId exists */}
         <TouchableOpacity
           style={[styles.openCalendarButton, !eventId && styles.openCalendarButtonDisabled]}
           onPress={handleOpenInCalendar}
@@ -265,6 +274,7 @@ export default function VisitDetailScreen() {
                     hasError={invalidFields.has(field.id)}
                     onUpdate={(val: FormFieldValue) => setResponse(field.id, val)}
                     readOnly={formReadOnly}
+                    setIsCompressing={setIsCompressing}
                   />
                 ))}
               </View>
@@ -298,9 +308,17 @@ interface FieldRendererProps {
   hasError: boolean;
   onUpdate: (val: FormFieldValue) => void;
   readOnly?: boolean;
+  setIsCompressing: (value: boolean) => void;
 }
 
-function FieldRenderer({ field, value, hasError, onUpdate, readOnly = false }: FieldRendererProps) {
+function FieldRenderer({
+  field,
+  value,
+  hasError,
+  onUpdate,
+  readOnly = false,
+  setIsCompressing,
+}: FieldRendererProps) {
   const isRequired = field.required;
   const errorStyle = hasError ? styles.inputError : null;
 
@@ -318,12 +336,57 @@ function FieldRenderer({ field, value, hasError, onUpdate, readOnly = false }: F
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== 'granted') return Alert.alert('Error', 'Camera permission needed');
         const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-        if (!result.canceled) onUpdate(result.assets[0].uri);
+
+        if (!result.canceled && result.assets?.[0]?.uri) {
+          const sourceUri = result.assets[0].uri;
+          setIsCompressing(true);
+
+          try {
+            const manipResult: ImageManipulator.ImageResult = await ImageManipulator.manipulateAsync(
+              sourceUri,
+              [{ resize: { width: 1200 } }],
+              { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+            );
+
+            const compressedUri = manipResult.uri;
+            const fileName = `inspection_${Date.now()}_${compressedUri.split('/').pop() ?? 'photo.jpg'}`;
+            const destinationDir = `${FileSystem.documentDirectory}inspection_images/`;
+            const destinationUri = `${destinationDir}${fileName}`;
+
+            await FileSystem.makeDirectoryAsync(destinationDir, { intermediates: true });
+
+            const info = await FileSystem.getInfoAsync(compressedUri);
+            if (info.exists && info.size && info.size > 200 * 1024 * 1024) {
+              console.warn(`File too large to copy: ${compressedUri} (${info.size} bytes)`);
+              onUpdate(compressedUri);
+            } else {
+              await FileSystem.copyAsync({ from: compressedUri, to: destinationUri });
+
+              // Cleanup temporary files
+              if (compressedUri !== destinationUri) {
+                await FileSystem.deleteAsync(compressedUri, { idempotent: true });
+              }
+              if (sourceUri !== destinationUri && sourceUri !== compressedUri) {
+                await FileSystem.deleteAsync(sourceUri, { idempotent: true });
+              }
+
+              onUpdate(destinationUri);
+            }
+          } catch (error) {
+            console.error('Failed to persist captured file', error);
+            Alert.alert('Error', 'Could not save captured image permanently.');
+            onUpdate(sourceUri);
+          } finally {
+            setIsCompressing(false);
+          }
+        }
       } else {
         const result = await DocumentPicker.getDocumentAsync({
           type: field.uploadFileType === 'PDF' ? 'application/pdf' : '*/*',
         });
-        if (!result.canceled) onUpdate(result.assets[0].uri);
+        if (!result.canceled && result.assets?.[0]?.uri) {
+          onUpdate(result.assets[0].uri);
+        }
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to pick file');
@@ -551,6 +614,17 @@ const styles = StyleSheet.create({
   syncStatusText: {
     fontSize: 13,
     color: '#92400e',
+    fontWeight: '600',
+  },
+  compressingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  compressingText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#1d4ed8',
     fontWeight: '600',
   },
 });

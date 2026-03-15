@@ -4,5 +4,6 @@
     "strict": true,
     "experimentalDecorators": true,
     "useDefineForClassFields": false
-  }
+  },
+  "exclude": ["node_modules"]
 }
