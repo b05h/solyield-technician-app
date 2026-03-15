@@ -26,6 +26,8 @@ import { setVisitResponses, updateFieldResponse } from '../../src/store/slices/v
 import { selectEventIdForVisit } from '../../src/store/slices/visitsSlice';
 import { isWithinGeofenceWithAccuracy } from '../../src/utils/geo';
 import formSchemaJson from '../../src/data/form_schema.json';
+import { getInspectionByVisitId, saveInspectionRecord } from '../../src/db/actions';
+import type { InspectionResponses } from '../../src/types/db';
 
 const CHECK_IN_THRESHOLD_METERS = 500;
 
@@ -64,10 +66,39 @@ export default function VisitDetailScreen() {
   const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const [hasSavedLocally, setHasSavedLocally] = useState(false);
+  const [formReadOnly, setFormReadOnly] = useState(false);
+  const [hydrationDone, setHydrationDone] = useState(false);
 
   useEffect(() => {
     setResponsesState(formData);
   }, [visitId]);
+
+  useEffect(() => {
+    if (!visitId) {
+      setHydrationDone(true);
+      return;
+    }
+    let cancelled = false;
+    getInspectionByVisitId(visitId)
+      .then((record) => {
+        if (cancelled) return;
+        if (record) {
+          const stored = record.responses as unknown as Record<string, FormFieldValue>;
+          setResponsesState(stored);
+          dispatch(setVisitResponses({ visitId, responses: stored }));
+          setHasSavedLocally(!record.isSynced);
+          setFormReadOnly(record.isSynced);
+          setIsCheckedIn(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHydrationDone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visitId, dispatch]);
 
   const setResponse = useCallback(
     (fieldId: string, value: FormFieldValue) => {
@@ -125,12 +156,32 @@ export default function VisitDetailScreen() {
     }
   }, [eventId]);
 
-  const handleReviewReport = useCallback(() => {
+  const handleSaveProgress = useCallback(async () => {
+    if (!visit || !site) {
+      Alert.alert('Error', 'Visit or site information is missing.');
+      return;
+    }
+    try {
+      await saveInspectionRecord(
+        visitId,
+        visit.siteId,
+        schema.id,
+        responses as unknown as InspectionResponses,
+      );
+      setHasSavedLocally(true);
+      dispatch(setVisitResponses({ visitId, responses }));
+      Alert.alert('Saved', 'Inspection saved locally. Ready for sync.');
+    } catch (error) {
+      Alert.alert('Error', 'Could not save inspection locally.');
+    }
+  }, [visit, site, visitId, schema.id, responses, dispatch]);
+
+  const handleReviewReport = useCallback(async () => {
     const missing: string[] = [];
     schema.sections.forEach((sec) =>
       sec.fields.forEach((f) => {
         if (!isRequiredFilled(f, responses[f.id])) missing.push(f.id);
-      })
+      }),
     );
 
     if (missing.length > 0) {
@@ -139,9 +190,26 @@ export default function VisitDetailScreen() {
       return;
     }
 
-    dispatch(setVisitResponses({ visitId, responses }));
-    router.push({ pathname: '/visit/report', params: { id: visitId } });
-  }, [schema, responses, dispatch, visitId, router]);
+    if (!visit || !site) {
+      Alert.alert('Error', 'Visit or site information is missing.');
+      return;
+    }
+
+    try {
+      await saveInspectionRecord(
+        visitId,
+        visit.siteId,
+        schema.id,
+        responses as unknown as InspectionResponses,
+      );
+      setHasSavedLocally(true);
+      dispatch(setVisitResponses({ visitId, responses }));
+      Alert.alert('Saved', 'Inspection saved locally. Ready for sync.');
+      router.push({ pathname: '/visit/report', params: { id: visitId } });
+    } catch (error) {
+      Alert.alert('Error', 'Could not save inspection locally.');
+    }
+  }, [schema, responses, visit, site, visitId, dispatch, router]);
 
   if (!visit)
     return (
@@ -158,9 +226,16 @@ export default function VisitDetailScreen() {
           {site?.name} • ID: {visitId}
         </Text>
 
+        {hasSavedLocally && (
+          <View style={styles.syncStatusRow}>
+            <View style={styles.syncStatusIcon} />
+            <Text style={styles.syncStatusText}>Waiting to Sync</Text>
+          </View>
+        )}
+
         {/* ✅ Always show button; disabled until eventId exists */}
         <TouchableOpacity
-          style={[styles.openCalendarButton, !eventId && { opacity: 0.5 }]}
+          style={[styles.openCalendarButton, !eventId && styles.openCalendarButtonDisabled]}
           onPress={handleOpenInCalendar}
           disabled={!eventId}
         >
@@ -189,12 +264,24 @@ export default function VisitDetailScreen() {
                     value={responses[field.id]}
                     hasError={invalidFields.has(field.id)}
                     onUpdate={(val: FormFieldValue) => setResponse(field.id, val)}
+                    readOnly={formReadOnly}
                   />
                 ))}
               </View>
             ))}
-            <TouchableOpacity style={styles.reportButton} onPress={handleReviewReport}>
-              <Text style={styles.reportButtonText}>Review Report</Text>
+            <TouchableOpacity
+              style={styles.saveProgressButton}
+              onPress={handleSaveProgress}
+              disabled={formReadOnly}
+            >
+              <Text style={styles.saveProgressButtonText}>Save Progress</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.reportButton, formReadOnly && styles.reportButtonDisabled]}
+              onPress={handleReviewReport}
+              disabled={formReadOnly}
+            >
+              <Text style={styles.reportButtonText}>Submit Inspection</Text>
             </TouchableOpacity>
           </>
         )}
@@ -210,20 +297,22 @@ interface FieldRendererProps {
   value: FormFieldValue;
   hasError: boolean;
   onUpdate: (val: FormFieldValue) => void;
+  readOnly?: boolean;
 }
 
-function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps) {
+function FieldRenderer({ field, value, hasError, onUpdate, readOnly = false }: FieldRendererProps) {
   const isRequired = field.required;
   const errorStyle = hasError ? styles.inputError : null;
 
   const toggleCheckbox = (opt: string) => {
+    if (readOnly) return;
     const current = Array.isArray(value) ? [...value] : [];
     const next = current.includes(opt) ? current.filter((v) => v !== opt) : [...current, opt];
     onUpdate(next);
   };
 
   const handleFilePicker = async () => {
-    if (field.type !== 'file') return;
+    if (readOnly || field.type !== 'file') return;
     try {
       if (field.uploadType === 'Capture') {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -249,11 +338,12 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
 
       {(field.type === 'text' || field.type === 'number') && (
         <TextInput
-          style={[styles.textInput, errorStyle]}
+          style={[styles.textInput, errorStyle, readOnly && styles.textInputReadOnly]}
           placeholder={field.placeholder}
           keyboardType={field.type === 'number' ? 'numeric' : 'default'}
           value={value?.toString() ?? ''}
           onChangeText={(t) => onUpdate(field.type === 'number' ? parseFloat(t) || '' : t)}
+          editable={!readOnly}
         />
       )}
 
@@ -261,7 +351,11 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
         <View style={field.display === 'Row' ? styles.rowOptions : styles.colOptions}>
           {field.options?.map((opt) => {
             const isSelected = Array.isArray(value) ? value.includes(opt) : value === opt;
-            return (
+            return readOnly ? (
+              <View key={opt} style={[styles.optBtn, isSelected && styles.optSelected]}>
+                <Text style={[styles.optText, isSelected && styles.optTextSelected]}>{opt}</Text>
+              </View>
+            ) : (
               <TouchableOpacity
                 key={opt}
                 style={[styles.optBtn, isSelected && styles.optSelected]}
@@ -277,27 +371,36 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
       {field.type === 'file' && (
         <View>
           {!value ? (
-            <TouchableOpacity style={[styles.fileBox, errorStyle]} onPress={handleFilePicker}>
-              <Text style={styles.fileBoxText}>
-                {field.uploadType === 'Capture' ? '📸 Take Photo' : '📄 Select Document'}
-              </Text>
-            </TouchableOpacity>
+            readOnly ? (
+              <Text style={styles.readOnlyPlaceholder}>—</Text>
+            ) : (
+              <TouchableOpacity style={[styles.fileBox, errorStyle]} onPress={handleFilePicker}>
+                <Text style={styles.fileBoxText}>
+                  {field.uploadType === 'Capture' ? '📸 Take Photo' : '📄 Select Document'}
+                </Text>
+              </TouchableOpacity>
+            )
           ) : (
             <View style={styles.previewContainer}>
               {field.uploadType === 'Capture' ? (
-                <Image source={{ uri: value as string }} style={styles.previewThumb} />
+                <Image
+                  source={{ uri: Array.isArray(value) ? value[0] : (value as string) }}
+                  style={styles.previewThumb}
+                />
               ) : (
                 <View style={styles.previewIcon}>
-                  <Text style={{ fontWeight: 'bold' }}>PDF</Text>
+                  <Text style={styles.previewIconText}>PDF</Text>
                 </View>
               )}
               <View style={styles.previewInfo}>
                 <Text numberOfLines={1} style={styles.fileName}>
-                  {(value as string).split('/').pop()}
+                  {(Array.isArray(value) ? value[0] : (value as string))?.split('/').pop() ?? ''}
                 </Text>
-                <TouchableOpacity onPress={() => onUpdate(null)}>
-                  <Text style={styles.removeText}>Remove File</Text>
-                </TouchableOpacity>
+                {!readOnly && (
+                  <TouchableOpacity onPress={() => onUpdate(null)}>
+                    <Text style={styles.removeText}>Remove File</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
@@ -326,6 +429,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 14,
+  },
+  openCalendarButtonDisabled: {
+    opacity: 0.5,
   },
 
   checkInButton: {
@@ -357,7 +463,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     color: '#0f172a',
   },
+  textInputReadOnly: {
+    backgroundColor: '#e2e8f0',
+  },
   inputError: { borderColor: '#ef4444', backgroundColor: '#fef2f2' },
+  readOnlyPlaceholder: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
   colOptions: { gap: 10 },
   rowOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   optBtn: {
@@ -397,9 +510,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  previewIconText: {
+    fontWeight: 'bold',
+  },
   previewInfo: { marginLeft: 12, flex: 1 },
   fileName: { fontSize: 13, color: '#334155' },
   removeText: { color: '#ef4444', fontWeight: 'bold', marginTop: 4, fontSize: 12 },
+  saveProgressButton: {
+    backgroundColor: '#64748b',
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  saveProgressButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   reportButton: {
     backgroundColor: '#2563eb',
     padding: 18,
@@ -408,5 +532,25 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 50,
   },
+  reportButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
   reportButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  syncStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  syncStatusIcon: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#facc15',
+    marginRight: 8,
+  },
+  syncStatusText: {
+    fontSize: 13,
+    color: '#92400e',
+    fontWeight: '600',
+  },
 });

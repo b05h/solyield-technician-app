@@ -17,6 +17,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="visit/[id]" />
           <Stack.Screen name="visit/report" />
+          <Stack.Screen name="local-reports" options={{ title: 'Local Drafts' }} />
         </Stack>
         <StatusBar style="auto" />
       </View>

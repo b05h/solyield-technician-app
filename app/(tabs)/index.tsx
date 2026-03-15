@@ -100,6 +100,13 @@ export default function MyVisitsScreen() {
         )}
       </Pressable>
 
+      <Pressable
+        style={styles.localDraftsButton}
+        onPress={() => router.push('/local-reports')}
+      >
+        <Text style={styles.localDraftsButtonText}>Local Drafts</Text>
+      </Pressable>
+
       {items.length === 0 ? (
         <Text style={styles.empty}>No visits assigned</Text>
       ) : (
@@ -143,6 +150,22 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   syncButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  localDraftsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#64748b',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minHeight: 44,
+  },
+  localDraftsButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
