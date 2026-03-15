@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   ListRenderItem,
   Pressable,
@@ -10,8 +11,10 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
-import { getAllInspections } from '../db/actions';
-import Inspection from '../db/models/Inspection';
+import { getAllInspections } from '../../src/db/actions';
+import Inspection from '../../src/db/models/Inspection';
+import { performSync } from '../../src/services/SyncService';
+import type { InspectionResponses } from '../../src/types/db';
 
 interface LocalReportItem {
   id: string;
@@ -29,15 +32,18 @@ function inspectionToItem(record: Inspection): LocalReportItem {
   };
 }
 
-export default function LocalReportsScreen() {
+export default function LocalReportsRoute() {
   const router = useRouter();
   const [items, setItems] = useState<LocalReportItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const loadInspections = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
       const records = await getAllInspections();
       setItems(records.map(inspectionToItem));
@@ -48,9 +54,26 @@ export default function LocalReportsScreen() {
     }
   }, []);
 
+  const runSync = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      await performSync();
+      const nowLabel = new Date().toLocaleString();
+      setLastSyncedAt(nowLabel);
+      await loadInspections();
+      Alert.alert('Sync complete', `Local inspections synced at ${nowLabel}`);
+    } catch (syncError) {
+      console.error('LocalReportsRoute: performSync failed', syncError);
+      Alert.alert('Sync failed', 'Unable to sync local inspections right now.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [loadInspections]);
+
   useEffect(() => {
     loadInspections();
-  }, [loadInspections]);
+    runSync();
+  }, [loadInspections, runSync]);
 
   const handlePress = useCallback(
     (visitId: string) => {
@@ -69,7 +92,12 @@ export default function LocalReportsScreen() {
         <Text style={styles.siteId}>{item.siteId}</Text>
         <Text style={styles.visitId}>Visit: {item.visitId}</Text>
         <View style={styles.syncRow}>
-          <View style={[styles.syncDot, item.isSynced ? styles.syncDotSynced : styles.syncDotPending]} />
+          <View
+            style={[
+              styles.syncDot,
+              item.isSynced ? styles.syncDotSynced : styles.syncDotPending,
+            ]}
+          />
           <Text style={styles.syncLabel}>{item.isSynced ? 'Synced' : 'Waiting to Sync'}</Text>
         </View>
       </Pressable>
@@ -97,7 +125,19 @@ export default function LocalReportsScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container}>      
+      <View style={styles.statusRow}>
+        {isSyncing ? (
+          <Text style={styles.statusText}>Syncing...</Text>
+        ) : (
+          <Text style={styles.statusText}>
+            Last Synced: {lastSyncedAt ?? 'Never'}
+          </Text>
+        )}
+        <Pressable style={styles.syncButton} onPress={runSync} disabled={isSyncing}>
+          <Text style={styles.syncButtonText}>{isSyncing ? 'Syncing...' : 'Sync Now'}</Text>
+        </Pressable>
+      </View>
       <Pressable style={styles.backRow} onPress={() => router.back()}>
         <Text style={styles.backLabel}>← Back</Text>
       </Pressable>
@@ -124,6 +164,30 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
+  },
+  statusText: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '500',
+  },
+  syncButton: {
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  syncButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   backRow: {
     paddingHorizontal: 16,

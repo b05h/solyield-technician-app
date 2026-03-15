@@ -10,7 +10,9 @@
     "build:dev": "expo run:android"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
     "@nozbe/watermelondb": "^0.28.0",
+    "@react-native-community/netinfo": "11.4.1",
     "@react-native-picker/picker": "2.11.1",
     "@reduxjs/toolkit": "^2.11.2",
     "expo": "~54.0.33",
