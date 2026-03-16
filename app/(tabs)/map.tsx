@@ -1,14 +1,21 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { StyleSheet, View, Text } from 'react-native';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Region, LatLng } from 'react-native-maps';
 import { useSelector } from 'react-redux';
 import type { RootState } from '../../src/store';
 import { openNavigationToSite } from '../../src/utils/navigation';
 
+interface MapErrorEvent {
+  nativeEvent: {
+    error: string;
+  };
+}
+
 export default function MapScreen() {
   const sites = useSelector((s: RootState) => s.sites.items);
+  const [mapError, setMapError] = useState<string | null>(null);
 
-  const initialRegion = useMemo(() => {
+  const initialRegion = useMemo<Region | null>(() => {
     if (sites.length === 0) return null;
     return {
       latitude: sites[0].location.lat,
@@ -20,18 +27,32 @@ export default function MapScreen() {
 
   if (!initialRegion) {
     return (
-      <View style={styles.center}><Text>Loading sites...</Text></View>
+      <View style={styles.center}>
+        <Text>Loading sites...</Text>
+      </View>
+    );
+  }
+
+  if (mapError) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorTitle}>Map unavailable</Text>
+        <Text style={styles.errorMessage}>
+          {mapError || 'Google Play Services may be missing or outdated on this device.'}
+        </Text>
+      </View>
     );
   }
 
   return (
     <View style={styles.container}>
       <MapView
-        provider={PROVIDER_DEFAULT}
+        provider={PROVIDER_GOOGLE}
         style={styles.map}
         initialRegion={initialRegion}
         showsUserLocation={true}
         showsMyLocationButton={true}
+        
       >
         {sites.map((site) => (
           <Marker
@@ -40,13 +61,10 @@ export default function MapScreen() {
             coordinate={{
               latitude: site.location.lat,
               longitude: site.location.lng,
-            }}
-            // Standard props ensure Android renders the text correctly
+            } as LatLng}
             title={site.name}
             description={`Capacity: ${site.capacity}`}
-            
-            // This satisfies the navigation requirement when the bubble is tapped
-            onCalloutPress={() => 
+            onCalloutPress={() =>
               openNavigationToSite(site.location.lat, site.location.lng, site.name)
             }
           />
@@ -59,5 +77,15 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' }
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  errorMessage: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
 });

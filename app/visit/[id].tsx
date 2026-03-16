@@ -1,4 +1,4 @@
-// app/visit/[id].tsx  (VisitDetailScreen)
+// app/visit/[id].tsx (VisitDetailScreen)
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -18,16 +18,23 @@ import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Calendar from 'expo-calendar';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { useDispatch, useSelector } from 'react-redux';
 import type { FormField, FormFieldValue, FormSchema } from '../../src/types/models';
 import type { RootState } from '../../src/store';
-import { setVisitResponses, updateFieldResponse } from '../../src/store/slices/visitsSlice';
+import { setVisitResponses, updateFieldResponse, updateVisit } from '../../src/store/slices/visitsSlice';
 import { selectEventIdForVisit } from '../../src/store/slices/visitsSlice';
 import { isWithinGeofenceWithAccuracy } from '../../src/utils/geo';
 import formSchemaJson from '../../src/data/form_schema.json';
+import { getInspectionByVisitId, saveInspectionRecord } from '../../src/db/actions';
+import type { InspectionResponses } from '../../src/types/db';
+import { performSync } from '../../src/services/SyncService';
+import NetInfo from '@react-native-community/netinfo';
 
 const CHECK_IN_THRESHOLD_METERS = 500;
+const EMPTY_FORM_DATA: Record<string, FormFieldValue> = {};
 
 function getSchema(): FormSchema {
   const raw = formSchemaJson as any;
@@ -49,7 +56,9 @@ export default function VisitDetailScreen() {
 
   const visits = useSelector((s: RootState) => s.visits.items);
   const sites = useSelector((s: RootState) => s.sites.items);
-  const formData = useSelector((s: RootState) => s.visits.formData[visitId] ?? {});
+  const formData = useSelector(
+    (s: RootState) => s.visits.formData[visitId] ?? EMPTY_FORM_DATA
+  );
   const eventId = useSelector((s: RootState) => selectEventIdForVisit(s, visitId));
 
   const schema = useMemo(() => getSchema(), []);
@@ -64,10 +73,40 @@ export default function VisitDetailScreen() {
   const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
   const [checkInLoading, setCheckInLoading] = useState(false);
   const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const [hasSavedLocally, setHasSavedLocally] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [formReadOnly, setFormReadOnly] = useState(false);
+  const [hydrationDone, setHydrationDone] = useState(false);
 
   useEffect(() => {
-    setResponsesState(formData);
-  }, [visitId]);
+    setResponsesState({ ...formData });
+  }, [formData]);
+
+  useEffect(() => {
+    if (!visitId) {
+      setHydrationDone(true);
+      return;
+    }
+    let cancelled = false;
+    getInspectionByVisitId(visitId)
+      .then((record) => {
+        if (cancelled) return;
+        if (record) {
+          const stored = record.responses as unknown as Record<string, FormFieldValue>;
+          setResponsesState(stored);
+          dispatch(setVisitResponses({ visitId, responses: stored }));
+          setHasSavedLocally(!record.isSynced);
+          setFormReadOnly(record.isSynced);
+          setIsCheckedIn(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHydrationDone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visitId, dispatch]);
 
   const setResponse = useCallback(
     (fieldId: string, value: FormFieldValue) => {
@@ -125,12 +164,32 @@ export default function VisitDetailScreen() {
     }
   }, [eventId]);
 
-  const handleReviewReport = useCallback(() => {
+  const handleSaveProgress = useCallback(async () => {
+    if (!visit || !site) {
+      Alert.alert('Error', 'Visit or site information is missing.');
+      return;
+    }
+    try {
+      await saveInspectionRecord(
+        visitId,
+        visit.siteId,
+        schema.id,
+        responses as unknown as InspectionResponses,
+      );
+      setHasSavedLocally(true);
+      dispatch(setVisitResponses({ visitId, responses }));
+      Alert.alert('Draft Saved', 'Your progress has been saved locally.');
+    } catch (error) {
+      Alert.alert('Error', 'Could not save inspection locally.');
+    }
+  }, [visit, site, visitId, schema.id, responses, dispatch]);
+
+  const handleReviewReport = useCallback(async () => {
     const missing: string[] = [];
     schema.sections.forEach((sec) =>
       sec.fields.forEach((f) => {
         if (!isRequiredFilled(f, responses[f.id])) missing.push(f.id);
-      })
+      }),
     );
 
     if (missing.length > 0) {
@@ -139,9 +198,90 @@ export default function VisitDetailScreen() {
       return;
     }
 
-    dispatch(setVisitResponses({ visitId, responses }));
-    router.push({ pathname: '/visit/report', params: { id: visitId } });
-  }, [schema, responses, dispatch, visitId, router]);
+    if (!visit || !site) {
+      Alert.alert('Error', 'Visit or site information is missing.');
+      return;
+    }
+
+    try {
+      await saveInspectionRecord(
+        visitId,
+        visit.siteId,
+        schema.id,
+        responses as unknown as InspectionResponses,
+      );
+
+      dispatch(updateVisit({ id: visitId, updates: { status: 'completed' } }));
+      setHasSavedLocally(true);
+      dispatch(setVisitResponses({ visitId, responses }));
+
+      const netState = await NetInfo.fetch();
+      const isOnline = !!netState.isConnected;
+
+      if (!isOnline) {
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+        return;
+      }
+
+      try {
+        await performSync({ silent: true });
+
+        const updatedRecord = await getInspectionByVisitId(visitId);
+
+        if (updatedRecord?.isSynced) {
+          setHasSavedLocally(false);
+          Alert.alert('Success', 'Inspection submitted.', [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]);
+          return;
+        }
+
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+      } catch {
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Could not finalize inspection.');
+    }
+  }, [schema, responses, visit, site, visitId, dispatch, router]);
 
   if (!visit)
     return (
@@ -158,9 +298,22 @@ export default function VisitDetailScreen() {
           {site?.name} • ID: {visitId}
         </Text>
 
-        {/* ✅ Always show button; disabled until eventId exists */}
+        {isCompressing && (
+          <View style={styles.compressingRow}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.compressingText}>Compressing...</Text>
+          </View>
+        )}
+
+        {hasSavedLocally && (
+          <View style={styles.syncStatusRow}>
+            <View style={styles.syncStatusIcon} />
+            <Text style={styles.syncStatusText}>Draft Saved Locally</Text>
+          </View>
+        )}
+
         <TouchableOpacity
-          style={[styles.openCalendarButton, !eventId && { opacity: 0.5 }]}
+          style={[styles.openCalendarButton, !eventId && styles.openCalendarButtonDisabled]}
           onPress={handleOpenInCalendar}
           disabled={!eventId}
         >
@@ -175,7 +328,7 @@ export default function VisitDetailScreen() {
             onPress={handleCheckIn}
             disabled={checkInLoading}
           >
-            {checkInLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkInButtonText}>I'M AT THE SITE</Text>}
+            {checkInLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkInButtonText}>CHECK IN AT SITE</Text>}
           </TouchableOpacity>
         ) : (
           <>
@@ -189,13 +342,30 @@ export default function VisitDetailScreen() {
                     value={responses[field.id]}
                     hasError={invalidFields.has(field.id)}
                     onUpdate={(val: FormFieldValue) => setResponse(field.id, val)}
+                    readOnly={formReadOnly}
+                    setIsCompressing={setIsCompressing}
                   />
                 ))}
               </View>
             ))}
-            <TouchableOpacity style={styles.reportButton} onPress={handleReviewReport}>
-              <Text style={styles.reportButtonText}>Review Report</Text>
-            </TouchableOpacity>
+
+            <View style={styles.buttonGroup}>
+              <TouchableOpacity
+                style={[styles.saveProgressButton, formReadOnly && styles.disabledButton]}
+                onPress={handleSaveProgress}
+                disabled={formReadOnly}
+              >
+                <Text style={styles.saveProgressButtonText}>Save Progress</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.reportButton, formReadOnly && styles.reportButtonDisabled]}
+                onPress={handleReviewReport}
+                disabled={formReadOnly}
+              >
+                <Text style={styles.reportButtonText}>Submit Inspection</Text>
+              </TouchableOpacity>
+            </View>
           </>
         )}
       </ScrollView>
@@ -203,38 +373,87 @@ export default function VisitDetailScreen() {
   );
 }
 
-// --- Dynamic Field Renderer Component ---
-
 interface FieldRendererProps {
   field: FormField;
   value: FormFieldValue;
   hasError: boolean;
   onUpdate: (val: FormFieldValue) => void;
+  readOnly?: boolean;
+  setIsCompressing: (value: boolean) => void;
 }
 
-function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps) {
+function FieldRenderer({
+  field,
+  value,
+  hasError,
+  onUpdate,
+  readOnly = false,
+  setIsCompressing,
+}: FieldRendererProps) {
   const isRequired = field.required;
   const errorStyle = hasError ? styles.inputError : null;
 
   const toggleCheckbox = (opt: string) => {
+    if (readOnly) return;
     const current = Array.isArray(value) ? [...value] : [];
     const next = current.includes(opt) ? current.filter((v) => v !== opt) : [...current, opt];
     onUpdate(next);
   };
 
   const handleFilePicker = async () => {
-    if (field.type !== 'file') return;
+    if (readOnly || field.type !== 'file') return;
     try {
       if (field.uploadType === 'Capture') {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== 'granted') return Alert.alert('Error', 'Camera permission needed');
         const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-        if (!result.canceled) onUpdate(result.assets[0].uri);
+
+        if (!result.canceled && result.assets?.[0]?.uri) {
+          const sourceUri = result.assets[0].uri;
+          setIsCompressing(true);
+
+          try {
+            const manipResult: ImageManipulator.ImageResult = await ImageManipulator.manipulateAsync(
+              sourceUri,
+              [{ resize: { width: 1200 } }],
+              { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+            );
+
+            const compressedUri = manipResult.uri;
+            const fileName = `inspection_${Date.now()}_${compressedUri.split('/').pop() ?? 'photo.jpg'}`;
+            const destinationDir = `${FileSystem.documentDirectory}inspection_images/`;
+            const destinationUri = `${destinationDir}${fileName}`;
+
+            await FileSystem.makeDirectoryAsync(destinationDir, { intermediates: true });
+
+            const info = await FileSystem.getInfoAsync(compressedUri);
+            if (info.exists && info.size && info.size > 200 * 1024 * 1024) {
+              onUpdate(compressedUri);
+            } else {
+              await FileSystem.copyAsync({ from: compressedUri, to: destinationUri });
+
+              if (compressedUri !== destinationUri) {
+                await FileSystem.deleteAsync(compressedUri, { idempotent: true });
+              }
+              if (sourceUri !== destinationUri && sourceUri !== compressedUri) {
+                await FileSystem.deleteAsync(sourceUri, { idempotent: true });
+              }
+
+              onUpdate(destinationUri);
+            }
+          } catch (error) {
+            onUpdate(sourceUri);
+          } finally {
+            setIsCompressing(false);
+          }
+        }
       } else {
         const result = await DocumentPicker.getDocumentAsync({
           type: field.uploadFileType === 'PDF' ? 'application/pdf' : '*/*',
         });
-        if (!result.canceled) onUpdate(result.assets[0].uri);
+        if (!result.canceled && result.assets?.[0]?.uri) {
+          onUpdate(result.assets[0].uri);
+        }
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to pick file');
@@ -249,11 +468,12 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
 
       {(field.type === 'text' || field.type === 'number') && (
         <TextInput
-          style={[styles.textInput, errorStyle]}
+          style={[styles.textInput, errorStyle, readOnly && styles.textInputReadOnly]}
           placeholder={field.placeholder}
           keyboardType={field.type === 'number' ? 'numeric' : 'default'}
           value={value?.toString() ?? ''}
           onChangeText={(t) => onUpdate(field.type === 'number' ? parseFloat(t) || '' : t)}
+          editable={!readOnly}
         />
       )}
 
@@ -261,7 +481,11 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
         <View style={field.display === 'Row' ? styles.rowOptions : styles.colOptions}>
           {field.options?.map((opt) => {
             const isSelected = Array.isArray(value) ? value.includes(opt) : value === opt;
-            return (
+            return readOnly ? (
+              <View key={opt} style={[styles.optBtn, isSelected && styles.optSelected]}>
+                <Text style={[styles.optText, isSelected && styles.optTextSelected]}>{opt}</Text>
+              </View>
+            ) : (
               <TouchableOpacity
                 key={opt}
                 style={[styles.optBtn, isSelected && styles.optSelected]}
@@ -277,27 +501,36 @@ function FieldRenderer({ field, value, hasError, onUpdate }: FieldRendererProps)
       {field.type === 'file' && (
         <View>
           {!value ? (
-            <TouchableOpacity style={[styles.fileBox, errorStyle]} onPress={handleFilePicker}>
-              <Text style={styles.fileBoxText}>
-                {field.uploadType === 'Capture' ? '📸 Take Photo' : '📄 Select Document'}
-              </Text>
-            </TouchableOpacity>
+            readOnly ? (
+              <Text style={styles.readOnlyPlaceholder}>—</Text>
+            ) : (
+              <TouchableOpacity style={[styles.fileBox, errorStyle]} onPress={handleFilePicker}>
+                <Text style={styles.fileBoxText}>
+                  {field.uploadType === 'Capture' ? '📸 Take Photo' : '📄 Select Document'}
+                </Text>
+              </TouchableOpacity>
+            )
           ) : (
             <View style={styles.previewContainer}>
               {field.uploadType === 'Capture' ? (
-                <Image source={{ uri: value as string }} style={styles.previewThumb} />
+                <Image
+                  source={{ uri: Array.isArray(value) ? value[0] : (value as string) }}
+                  style={styles.previewThumb}
+                />
               ) : (
                 <View style={styles.previewIcon}>
-                  <Text style={{ fontWeight: 'bold' }}>PDF</Text>
+                  <Text style={styles.previewIconText}>PDF</Text>
                 </View>
               )}
               <View style={styles.previewInfo}>
                 <Text numberOfLines={1} style={styles.fileName}>
-                  {(value as string).split('/').pop()}
+                  {(Array.isArray(value) ? value[0] : (value as string))?.split('/').pop() ?? ''}
                 </Text>
-                <TouchableOpacity onPress={() => onUpdate(null)}>
-                  <Text style={styles.removeText}>Remove File</Text>
-                </TouchableOpacity>
+                {!readOnly && (
+                  <TouchableOpacity onPress={() => onUpdate(null)}>
+                    <Text style={styles.removeText}>Remove File</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
@@ -322,11 +555,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  openCalendarButtonText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 14,
-  },
+  openCalendarButtonText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  openCalendarButtonDisabled: { opacity: 0.5 },
 
   checkInButton: {
     backgroundColor: '#f97316',
@@ -336,6 +566,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   checkInButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+
   section: {
     backgroundColor: '#fff',
     padding: 16,
@@ -357,7 +588,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     color: '#0f172a',
   },
+  textInputReadOnly: { backgroundColor: '#e2e8f0' },
   inputError: { borderColor: '#ef4444', backgroundColor: '#fef2f2' },
+  readOnlyPlaceholder: { fontSize: 14, color: '#94a3b8' },
   colOptions: { gap: 10 },
   rowOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   optBtn: {
@@ -397,16 +630,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  previewIconText: { fontWeight: 'bold' },
   previewInfo: { marginLeft: 12, flex: 1 },
   fileName: { fontSize: 13, color: '#334155' },
   removeText: { color: '#ef4444', fontWeight: 'bold', marginTop: 4, fontSize: 12 },
+
+  buttonGroup: {
+    marginTop: 10,
+    marginBottom: 50,
+    gap: 12,
+  },
+  saveProgressButton: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#cbd5e1',
+    borderWidth: 1,
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  saveProgressButtonText: { color: '#475569', fontWeight: '600', fontSize: 16 },
   reportButton: {
     backgroundColor: '#2563eb',
     padding: 18,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 50,
   },
+  reportButtonDisabled: { backgroundColor: '#94a3b8' },
   reportButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  disabledButton: { opacity: 0.5 },
+
+  syncStatusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  syncStatusIcon: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#facc15', marginRight: 8 },
+  syncStatusText: { fontSize: 13, color: '#92400e', fontWeight: '600' },
+  compressingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  compressingText: { marginLeft: 8, fontSize: 13, color: '#1d4ed8', fontWeight: '600' },
 });

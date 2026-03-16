@@ -13,7 +13,14 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.solyield.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SolYield uses your location to show nearby solar sites on the map."
+      },
+      "config": {
+        "googleMapsApiKey": "AIzaSyDS8vqMQh7YSAssMRdZlaDQMXNX29OJSuU"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,13 +28,23 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.solyield.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDS8vqMQh7YSAssMRdZlaDQMXNX29OJSuU"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-sqlite"
     ]
   }
 }
