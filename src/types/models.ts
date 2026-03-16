@@ -26,6 +26,7 @@ export interface Visit {
   time: string;
   title: string;
   technicianId?: string;
+  status?: 'pending' | 'completed';
 }
 
 export interface Technician {

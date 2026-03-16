@@ -1,4 +1,4 @@
-// app/visit/[id].tsx  (VisitDetailScreen)
+// app/visit/[id].tsx (VisitDetailScreen)
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -24,14 +24,17 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useDispatch, useSelector } from 'react-redux';
 import type { FormField, FormFieldValue, FormSchema } from '../../src/types/models';
 import type { RootState } from '../../src/store';
-import { setVisitResponses, updateFieldResponse } from '../../src/store/slices/visitsSlice';
+import { setVisitResponses, updateFieldResponse, updateVisit } from '../../src/store/slices/visitsSlice';
 import { selectEventIdForVisit } from '../../src/store/slices/visitsSlice';
 import { isWithinGeofenceWithAccuracy } from '../../src/utils/geo';
 import formSchemaJson from '../../src/data/form_schema.json';
 import { getInspectionByVisitId, saveInspectionRecord } from '../../src/db/actions';
 import type { InspectionResponses } from '../../src/types/db';
+import { performSync } from '../../src/services/SyncService';
+import NetInfo from '@react-native-community/netinfo';
 
 const CHECK_IN_THRESHOLD_METERS = 500;
+const EMPTY_FORM_DATA: Record<string, FormFieldValue> = {};
 
 function getSchema(): FormSchema {
   const raw = formSchemaJson as any;
@@ -53,7 +56,9 @@ export default function VisitDetailScreen() {
 
   const visits = useSelector((s: RootState) => s.visits.items);
   const sites = useSelector((s: RootState) => s.sites.items);
-  const formData = useSelector((s: RootState) => s.visits.formData[visitId] ?? {});
+  const formData = useSelector(
+    (s: RootState) => s.visits.formData[visitId] ?? EMPTY_FORM_DATA
+  );
   const eventId = useSelector((s: RootState) => selectEventIdForVisit(s, visitId));
 
   const schema = useMemo(() => getSchema(), []);
@@ -74,7 +79,7 @@ export default function VisitDetailScreen() {
   const [hydrationDone, setHydrationDone] = useState(false);
 
   useEffect(() => {
-    setResponsesState(formData);
+    setResponsesState({ ...formData });
   }, [formData]);
 
   useEffect(() => {
@@ -173,7 +178,7 @@ export default function VisitDetailScreen() {
       );
       setHasSavedLocally(true);
       dispatch(setVisitResponses({ visitId, responses }));
-      Alert.alert('Saved', 'Inspection saved locally. Ready for sync.');
+      Alert.alert('Draft Saved', 'Your progress has been saved locally.');
     } catch (error) {
       Alert.alert('Error', 'Could not save inspection locally.');
     }
@@ -205,12 +210,76 @@ export default function VisitDetailScreen() {
         schema.id,
         responses as unknown as InspectionResponses,
       );
+
+      dispatch(updateVisit({ id: visitId, updates: { status: 'completed' } }));
       setHasSavedLocally(true);
       dispatch(setVisitResponses({ visitId, responses }));
-      Alert.alert('Saved', 'Inspection saved locally. Ready for sync.');
-      router.push({ pathname: '/visit/report', params: { id: visitId } });
+
+      const netState = await NetInfo.fetch();
+      const isOnline = !!netState.isConnected;
+
+      if (!isOnline) {
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+        return;
+      }
+
+      try {
+        await performSync({ silent: true });
+
+        const updatedRecord = await getInspectionByVisitId(visitId);
+
+        if (updatedRecord?.isSynced) {
+          setHasSavedLocally(false);
+          Alert.alert('Success', 'Inspection submitted.', [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]);
+          return;
+        }
+
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+      } catch {
+        Alert.alert(
+          'Saved Offline',
+          'Inspection was saved locally. Sync will happen when connection is available.',
+          [
+            {
+              text: 'View Report',
+              onPress: () =>
+                router.push({ pathname: '/visit/report', params: { id: visitId } }),
+            },
+            { text: 'Done', onPress: () => router.back() },
+          ]
+        );
+      }
     } catch (error) {
-      Alert.alert('Error', 'Could not save inspection locally.');
+      Alert.alert('Error', 'Could not finalize inspection.');
     }
   }, [schema, responses, visit, site, visitId, dispatch, router]);
 
@@ -239,7 +308,7 @@ export default function VisitDetailScreen() {
         {hasSavedLocally && (
           <View style={styles.syncStatusRow}>
             <View style={styles.syncStatusIcon} />
-            <Text style={styles.syncStatusText}>Waiting to Sync</Text>
+            <Text style={styles.syncStatusText}>Draft Saved Locally</Text>
           </View>
         )}
 
@@ -259,7 +328,7 @@ export default function VisitDetailScreen() {
             onPress={handleCheckIn}
             disabled={checkInLoading}
           >
-            {checkInLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkInButtonText}>I'M AT THE SITE</Text>}
+            {checkInLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkInButtonText}>CHECK IN AT SITE</Text>}
           </TouchableOpacity>
         ) : (
           <>
@@ -279,28 +348,30 @@ export default function VisitDetailScreen() {
                 ))}
               </View>
             ))}
-            <TouchableOpacity
-              style={styles.saveProgressButton}
-              onPress={handleSaveProgress}
-              disabled={formReadOnly}
-            >
-              <Text style={styles.saveProgressButtonText}>Save Progress</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.reportButton, formReadOnly && styles.reportButtonDisabled]}
-              onPress={handleReviewReport}
-              disabled={formReadOnly}
-            >
-              <Text style={styles.reportButtonText}>Submit Inspection</Text>
-            </TouchableOpacity>
+
+            <View style={styles.buttonGroup}>
+              <TouchableOpacity
+                style={[styles.saveProgressButton, formReadOnly && styles.disabledButton]}
+                onPress={handleSaveProgress}
+                disabled={formReadOnly}
+              >
+                <Text style={styles.saveProgressButtonText}>Save Progress</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.reportButton, formReadOnly && styles.reportButtonDisabled]}
+                onPress={handleReviewReport}
+                disabled={formReadOnly}
+              >
+                <Text style={styles.reportButtonText}>Submit Inspection</Text>
+              </TouchableOpacity>
+            </View>
           </>
         )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
-
-// --- Dynamic Field Renderer Component ---
 
 interface FieldRendererProps {
   field: FormField;
@@ -357,12 +428,10 @@ function FieldRenderer({
 
             const info = await FileSystem.getInfoAsync(compressedUri);
             if (info.exists && info.size && info.size > 200 * 1024 * 1024) {
-              console.warn(`File too large to copy: ${compressedUri} (${info.size} bytes)`);
               onUpdate(compressedUri);
             } else {
               await FileSystem.copyAsync({ from: compressedUri, to: destinationUri });
 
-              // Cleanup temporary files
               if (compressedUri !== destinationUri) {
                 await FileSystem.deleteAsync(compressedUri, { idempotent: true });
               }
@@ -373,8 +442,6 @@ function FieldRenderer({
               onUpdate(destinationUri);
             }
           } catch (error) {
-            console.error('Failed to persist captured file', error);
-            Alert.alert('Error', 'Could not save captured image permanently.');
             onUpdate(sourceUri);
           } finally {
             setIsCompressing(false);
@@ -488,14 +555,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  openCalendarButtonText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  openCalendarButtonDisabled: {
-    opacity: 0.5,
-  },
+  openCalendarButtonText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  openCalendarButtonDisabled: { opacity: 0.5 },
 
   checkInButton: {
     backgroundColor: '#f97316',
@@ -505,6 +566,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   checkInButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+
   section: {
     backgroundColor: '#fff',
     padding: 16,
@@ -526,14 +588,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     color: '#0f172a',
   },
-  textInputReadOnly: {
-    backgroundColor: '#e2e8f0',
-  },
+  textInputReadOnly: { backgroundColor: '#e2e8f0' },
   inputError: { borderColor: '#ef4444', backgroundColor: '#fef2f2' },
-  readOnlyPlaceholder: {
-    fontSize: 14,
-    color: '#94a3b8',
-  },
+  readOnlyPlaceholder: { fontSize: 14, color: '#94a3b8' },
   colOptions: { gap: 10 },
   rowOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   optBtn: {
@@ -573,58 +630,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  previewIconText: {
-    fontWeight: 'bold',
-  },
+  previewIconText: { fontWeight: 'bold' },
   previewInfo: { marginLeft: 12, flex: 1 },
   fileName: { fontSize: 13, color: '#334155' },
   removeText: { color: '#ef4444', fontWeight: 'bold', marginTop: 4, fontSize: 12 },
+
+  buttonGroup: {
+    marginTop: 10,
+    marginBottom: 50,
+    gap: 12,
+  },
   saveProgressButton: {
-    backgroundColor: '#64748b',
-    padding: 18,
+    backgroundColor: '#f1f5f9',
+    borderColor: '#cbd5e1',
+    borderWidth: 1,
+    padding: 16,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 10,
   },
-  saveProgressButtonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  saveProgressButtonText: { color: '#475569', fontWeight: '600', fontSize: 16 },
   reportButton: {
     backgroundColor: '#2563eb',
     padding: 18,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 50,
   },
-  reportButtonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
+  reportButtonDisabled: { backgroundColor: '#94a3b8' },
   reportButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  syncStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  syncStatusIcon: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#facc15',
-    marginRight: 8,
-  },
-  syncStatusText: {
-    fontSize: 13,
-    color: '#92400e',
-    fontWeight: '600',
-  },
-  compressingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  compressingText: {
-    marginLeft: 8,
-    fontSize: 13,
-    color: '#1d4ed8',
-    fontWeight: '600',
-  },
+  disabledButton: { opacity: 0.5 },
+
+  syncStatusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  syncStatusIcon: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#facc15', marginRight: 8 },
+  syncStatusText: { fontSize: 13, color: '#92400e', fontWeight: '600' },
+  compressingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  compressingText: { marginLeft: 8, fontSize: 13, color: '#1d4ed8', fontWeight: '600' },
 });
