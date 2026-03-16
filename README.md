@@ -37,7 +37,7 @@ One-touch Sync to Device functionality
 
 Open any visit directly inside the native Calendar app
 
-📍 1.2 Geolocation-Verified Check-In
+## 📍 1.2 Geolocation-Verified Check-In
 🔹 Live Proximity Tracking
 
 Integrated expo-location for real-time technician positioning.
@@ -51,6 +51,7 @@ Uses the Haversine Formula to compute real-world distance
 Activates only when technician is within 500 meters of the solar site
 
 ✅ Prevents fraudulent remote check-ins
+
 ✅ Ensures on-site compliance
 
 ## 🗺️ 1.3 Mapping & Navigation
