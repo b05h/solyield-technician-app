@@ -195,6 +195,7 @@ Intelligent Conflict Resolution to protect data integrity.
 🔹 Hardened Data Persistence (Restart Resilient) * Persistence Across App Restarts: Unlike state-only apps, all form progress is written to the SQLite disk. If the app is force-closed mid-inspection, all data and photos are instantly restored upon relaunch.
 
 Atomic Transactions: Ensures that app crashes during a "Save" won't result in database corruption.
+
 🔹 State Reactivity The UI automatically reflects database changes without manual refreshes.
 
 ## 🔄 2.2 Resilient Sync Service & Beeceptor Integration
