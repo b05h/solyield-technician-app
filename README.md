@@ -249,26 +249,37 @@ https://drive.google.com/file/d/1i39gb-P6GGe6erttGM8g52yvZ2YGJ4R4/view?usp=shari
 👉 [View Screenshots]
 1.Technician Dashboard
 https://drive.google.com/file/d/1bLgC40qsEI96ydGJCwhwsLBZ05y_nSyT/view?usp=drive_link
+
 2. Visit Details & Site Check-In
 https://drive.google.com/file/d/1zsg7OimUCwjP_sIaBjjdFdgRV7376-Gk/view?usp=drive_link
-3. Local Draft Saving
+
+4. Local Draft Saving
 https://drive.google.com/file/d/17YfA5kYo9Q1VNC_2y6ElbDuJzdbnbpeY/view?usp=drive_link
-4. Successful Inspection Submission
+
+6. Successful Inspection Submission
 https://drive.google.com/file/d/1LsXHAKU7Ipx9Ckd-Upm2B4J9ja-QSs5M/view?usp=drive_link
-5. Offline Technician Dashboard
+
+8. Offline Technician Dashboard
 https://drive.google.com/file/d/1RB5nVpnFPS6iLmcf2NfmY2qS7uh2wo0x/view?usp=drive_link
-6. Local Draft Management
+
+10. Local Draft Management
 https://drive.google.com/file/d/1kcrSk01aDTQA8Akn91PJxTtA1moz8Ijd/view?usp=drive_link
-7. Offline Inspection Save
+
+12. Offline Inspection Save
 https://drive.google.com/file/d/1KrNMcCZKMeHqP_eP2lSCL7chRKfgoMza/view?usp=drive_link
-8. Offline Draft Queue
+
+14. Offline Draft Queue
 https://drive.google.com/file/d/1YKz1oNE9WWTMB3ZMGRv02vPIa5fhGNHk/view?usp=drive_link
-9. Automatic Sync After Connection Restore
+
+16. Automatic Sync After Connection Restore
 https://drive.google.com/file/d/1BYZ965Ka6bu63LuyfkkhepJFCdFiF4tN/view?usp=drive_link
-10. Manual Sync Option
+
+18. Manual Sync Option
 https://drive.google.com/file/d/1qPW9bwtLgkuxwPGiF8JUs5iuXSe62PcR/view?usp=drive_link
-11. Updated Dashboard After Sync
+
+19. Updated Dashboard After Sync
 https://drive.google.com/file/d/1IcMO67G6pKmH6LhaHqhz-c3DRAsYFCYU/view?usp=drive_link
-12. Backend API Request (Inspection Submission)
+
+21. Backend API Request (Inspection Submission)
 https://drive.google.com/file/d/1Pvgs9DVATCWsBwuV6zLcClMLGvdxAHDY/view?usp=drive_link
 
