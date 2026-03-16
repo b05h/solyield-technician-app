@@ -203,10 +203,12 @@ Atomic Transactions: Ensures that app crashes during a "Save" won't result in da
 🔹 Multipart Reconstruction Logic * Physical Fetch: The service uses stored URIs to grab actual binary files from the device disk.
 
 FormData Assembly: Dynamically constructs Multipart/Form-Data requests, attaching binaries alongside JSON metadata for a single-trip submission.
+
 🔹 🏆 Bonus: Intelligent Conflict Handling Prevents "Stale Data Overwrites" using last_modified timestamps. If the server returns a 409 Conflict, the app flags the record to ensure team-wide data consistency.
 
 ## 📸 2.3 Advanced Media Handling & URI Storage
 🔹 Automated Image Optimization Integrated expo-image-manipulator to scale and compress photos, reducing bandwidth usage by up to 80% while maintaining technical clarity.
+
 🔹 Smart URI Persistence * Storage Logic: Instead of bloating the DB with Base64 strings, the app stores the Absolute File URI (e.g., file:///.../photo.jpg).
 
 Performance Optimization: Using file pointers ensures the app remains fast and responsive, even with hundreds of inspection photos stored locally.
